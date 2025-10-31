@@ -32,52 +32,52 @@ This plan breaks down the Aether Keep v2 development roadmap into actionable tas
 
 ### 1.2 Database Schema Design
 
-- [ ] Design core database schema (see `database.md` when ready)
-- [ ] Create `users` table schema (extends Supabase auth.users)
-- [ ] Create `profiles` table for user metadata
-- [ ] Create `campaigns` table with ownership and metadata
-- [ ] Create `campaign_members` junction table with roles
-- [ ] Create `campaign_worlds` junction table (campaign to world linking)
-- [ ] Create `campaign_systems` junction table (campaign to system linking)
-- [ ] Create `worlds` table with ownership and metadata
-- [ ] Create `world_members` junction table with roles
-- [ ] Create `systems` table with ownership and metadata
-- [ ] Create `system_members` junction table with roles
-- [ ] Create `predefined_systems` table for official systems (D&D 5e, Pathfinder 2e, etc.)
-- [ ] Create `pages` table for hierarchical content (used by worlds and systems)
-- [ ] Create `page_versions` table for version history
-- [ ] Create `categories` table for organizing pages
-- [ ] Create `custom_fields` table for flexible entry structures
-- [ ] Create `field_values` table for storing custom field data
-- [ ] Create `tags` table for metadata
-- [ ] Create `sessions` table for campaign session tracking
-- [ ] Create `characters` table for campaign characters
-- [ ] Create `notes` table for campaign notes with visibility levels
-- [ ] Set up database indexes for performance
-- [ ] Document all table schemas in `database.md`
+- [x] Design core database schema (see `database.md` when ready)
+- [x] Create `users` table schema (extends Supabase auth.users)
+- [x] Create `profiles` table for user metadata
+- [x] Create `campaigns` table with ownership and metadata
+- [x] Create `campaign_members` junction table with roles
+- [x] Create `campaign_worlds` junction table (campaign to world linking)
+- [x] Create `campaign_systems` junction table (campaign to system linking)
+- [x] Create `worlds` table with ownership and metadata
+- [x] Create `world_members` junction table with roles
+- [x] Create `systems` table with ownership and metadata
+- [x] Create `system_members` junction table with roles
+- [x] Create `predefined_systems` table for official systems (D&D 5e, Pathfinder 2e, etc.)
+- [x] Create `pages` table for hierarchical content (used by worlds and systems)
+- [x] Create `page_versions` table for version history
+- [x] Create `categories` table for organizing pages
+- [x] Create `custom_fields` table for flexible entry structures
+- [x] Create `field_values` table for storing custom field data
+- [x] Create `tags` table for metadata
+- [x] Create `sessions` table for campaign session tracking
+- [x] Create `characters` table for campaign characters
+- [x] Create `notes` table for campaign notes with visibility levels
+- [x] Set up database indexes for performance
+- [x] Document all table schemas in `database.md`
 
 ### 1.3 Row Level Security (RLS) Policies
 
-- [ ] Enable RLS on all tables
-- [ ] Create RLS policies for `profiles` (users can read own profile)
-- [ ] Create RLS policies for `campaigns` (owner has full access)
-- [ ] Create RLS policies for `campaign_members` (access based on membership)
-- [ ] Create RLS policies for `campaign_worlds` (manage world linking)
-- [ ] Create RLS policies for `campaign_systems` (manage system linking)
-- [ ] Create RLS policies for `worlds` (owner and members based on role)
-- [ ] Create RLS policies for `world_members` (manage access control)
-- [ ] Create RLS policies for `systems` (owner and members based on role)
-- [ ] Create RLS policies for `system_members` (manage access control)
-- [ ] Create RLS policies for `predefined_systems` (read-only for all users)
-- [ ] Create RLS policies for world/system content access via campaigns:
-  - [ ] Campaign members can read linked world content
-  - [ ] Campaign members can read linked system content
-- [ ] Create RLS policies for `pages` (inherit from parent resource)
-- [ ] Create RLS policies for `notes` (based on visibility settings)
-- [ ] Create RLS policies for `sessions` (campaign members only)
-- [ ] Create RLS policies for `characters` (campaign members and owner)
+- [x] Enable RLS on all tables
+- [x] Create RLS policies for `profiles` (users can read own profile)
+- [x] Create RLS policies for `campaigns` (owner has full access)
+- [x] Create RLS policies for `campaign_members` (access based on membership)
+- [x] Create RLS policies for `campaign_worlds` (manage world linking)
+- [x] Create RLS policies for `campaign_systems` (manage system linking)
+- [x] Create RLS policies for `worlds` (owner and members based on role)
+- [x] Create RLS policies for `world_members` (manage access control)
+- [x] Create RLS policies for `systems` (owner and members based on role)
+- [x] Create RLS policies for `system_members` (manage access control)
+- [x] Create RLS policies for `predefined_systems` (read-only for all users)
+- [x] Create RLS policies for world/system content access via campaigns:
+  - [x] Campaign members can read linked world content
+  - [x] Campaign members can read linked system content
+- [x] Create RLS policies for `pages` (inherit from parent resource)
+- [x] Create RLS policies for `notes` (based on visibility settings)
+- [x] Create RLS policies for `sessions` (campaign members only)
+- [x] Create RLS policies for `characters` (campaign members and owner)
 - [ ] Test all RLS policies with different user scenarios
-- [ ] Document security model in `database.md`
+- [x] Document security model in `database.md`
 
 ### 1.4 Supabase Storage Setup
 

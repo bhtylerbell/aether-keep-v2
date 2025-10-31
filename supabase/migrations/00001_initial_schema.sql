@@ -1,25 +1,33 @@
-# Database Documentation
+-- =============================================
+-- Aether Keep v2 - Initial Database Schema
+-- =============================================
+-- This migration creates all tables, indexes, RLS policies,
+-- triggers, and helper functions for the application.
+--
+-- Run this in Supabase SQL Editor or via migrations
+-- =============================================
 
-## Overview
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-This document defines the complete database schema for Aether Keep v2, including all tables, relationships, Row Level Security (RLS) policies, indexes, and helper functions.
+-- =============================================
+-- HELPER FUNCTIONS & TRIGGERS
+-- =============================================
 
-**Key Design Principles:**
-- **Resource-based permissions**: Roles are tied to specific resources (campaigns, worlds, systems), not stored globally
-- **No circular RLS dependencies**: Authorization data is separated from user profile data
-- **Granular access control**: Users can have different roles across different resources
-- **Performance-first**: All foreign keys are indexed, complex checks use helper functions
-- **Audit-ready**: Timestamps and metadata for compliance and debugging
+-- Function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
----
+-- =============================================
+-- USER IDENTITY & PROFILES
+-- =============================================
 
-## User Identity & Profiles
-
-### Profiles Table
-
-Stores user profile information and metadata. Does NOT contain role/permission data to avoid RLS circular dependencies.
-
-```sql
+-- Profiles Table
 CREATE TABLE profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
@@ -30,10 +38,8 @@ CREATE TABLE profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_profiles_email ON profiles(email);
 
--- RLS Policies
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view own profile"
@@ -61,13 +67,13 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-```
 
-### Site Admins Table
+CREATE TRIGGER update_profiles_updated_at
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
 
-Platform-level administrators (for moderation, support, system management). This is separate from resource-specific roles.
-
-```sql
+-- Site Admins Table
 CREATE TABLE site_admins (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK (role IN ('admin', 'moderator')),
@@ -75,10 +81,8 @@ CREATE TABLE site_admins (
   granted_by UUID REFERENCES auth.users(id)
 );
 
--- Indexes
 CREATE INDEX idx_site_admins_role ON site_admins(role);
 
--- RLS Policies
 ALTER TABLE site_admins ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Admins can view site_admins"
@@ -99,15 +103,12 @@ CREATE POLICY "Admins can manage site_admins"
         AND sa.role = 'admin'
     )
   );
-```
 
----
+-- =============================================
+-- CAMPAIGNS
+-- =============================================
 
-## Campaign Manager
-
-### Campaigns Table
-
-```sql
+-- Campaigns Table
 CREATE TABLE campaigns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -120,14 +121,49 @@ CREATE TABLE campaigns (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_campaigns_created_by ON campaigns(created_by);
 CREATE INDEX idx_campaigns_is_archived ON campaigns(is_archived);
 CREATE INDEX idx_campaigns_created_at ON campaigns(created_at DESC);
 
--- RLS Policies
 ALTER TABLE campaigns ENABLE ROW LEVEL SECURITY;
 
+CREATE TRIGGER update_campaigns_updated_at
+  BEFORE UPDATE ON campaigns
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- Campaign Members Table
+CREATE TABLE campaign_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'gm', 'player')),
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(campaign_id, user_id)
+);
+
+CREATE INDEX idx_campaign_members_campaign_id ON campaign_members(campaign_id);
+CREATE INDEX idx_campaign_members_user_id ON campaign_members(user_id);
+CREATE INDEX idx_campaign_members_role ON campaign_members(role);
+
+ALTER TABLE campaign_members ENABLE ROW LEVEL SECURITY;
+
+-- Trigger to auto-add creator as owner
+CREATE OR REPLACE FUNCTION add_campaign_owner()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO campaign_members (campaign_id, user_id, role)
+  VALUES (NEW.id, NEW.created_by, 'owner');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_campaign_created
+  AFTER INSERT ON campaigns
+  FOR EACH ROW
+  EXECUTE FUNCTION add_campaign_owner();
+
+-- RLS Policies for Campaigns
 CREATE POLICY "Members can view campaigns"
   ON campaigns FOR SELECT
   USING (
@@ -164,43 +200,7 @@ CREATE POLICY "Owners can delete campaigns"
     )
   );
 
--- Trigger to update updated_at
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER update_campaigns_updated_at
-  BEFORE UPDATE ON campaigns
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-```
-
-### Campaign Members Table
-
-Defines who has access to a campaign and their role.
-
-```sql
-CREATE TABLE campaign_members (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'gm', 'player')),
-  joined_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(campaign_id, user_id)
-);
-
--- Indexes
-CREATE INDEX idx_campaign_members_campaign_id ON campaign_members(campaign_id);
-CREATE INDEX idx_campaign_members_user_id ON campaign_members(user_id);
-CREATE INDEX idx_campaign_members_role ON campaign_members(role);
-
--- RLS Policies
-ALTER TABLE campaign_members ENABLE ROW LEVEL SECURITY;
-
+-- RLS Policies for Campaign Members
 CREATE POLICY "Members can view campaign membership"
   ON campaign_members FOR SELECT
   USING (
@@ -222,27 +222,7 @@ CREATE POLICY "Owners and GMs can manage members"
     )
   );
 
--- Trigger to auto-add creator as owner
-CREATE OR REPLACE FUNCTION add_campaign_owner()
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO campaign_members (campaign_id, user_id, role)
-  VALUES (NEW.id, NEW.created_by, 'owner');
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-CREATE TRIGGER on_campaign_created
-  AFTER INSERT ON campaigns
-  FOR EACH ROW
-  EXECUTE FUNCTION add_campaign_owner();
-```
-
-### Campaign Invitations Table
-
-Tracks pending invitations to join campaigns.
-
-```sql
+-- Campaign Invitations Table
 CREATE TABLE campaign_invitations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -255,13 +235,11 @@ CREATE TABLE campaign_invitations (
   expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '7 days'
 );
 
--- Indexes
 CREATE INDEX idx_campaign_invitations_campaign_id ON campaign_invitations(campaign_id);
 CREATE INDEX idx_campaign_invitations_invited_email ON campaign_invitations(invited_email);
 CREATE INDEX idx_campaign_invitations_token ON campaign_invitations(token);
 CREATE INDEX idx_campaign_invitations_status ON campaign_invitations(status);
 
--- RLS Policies
 ALTER TABLE campaign_invitations ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Campaign members can view invitations"
@@ -287,13 +265,12 @@ CREATE POLICY "Owners and GMs can create invitations"
         AND cm.role IN ('owner', 'gm')
     )
   );
-```
 
-### Sessions Table
+-- =============================================
+-- SESSIONS
+-- =============================================
 
-Tracks campaign game sessions.
-
-```sql
+-- Sessions Table
 CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -303,7 +280,7 @@ CREATE TABLE sessions (
   scheduled_at TIMESTAMPTZ,
   duration_minutes INTEGER,
   location TEXT,
-  platform TEXT, -- e.g., "Roll20", "Discord", "In-Person"
+  platform TEXT,
   status TEXT DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'completed', 'cancelled')),
   recap TEXT,
   created_by UUID NOT NULL REFERENCES auth.users(id),
@@ -311,13 +288,11 @@ CREATE TABLE sessions (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_sessions_campaign_id ON sessions(campaign_id);
 CREATE INDEX idx_sessions_scheduled_at ON sessions(scheduled_at);
 CREATE INDEX idx_sessions_status ON sessions(status);
 CREATE INDEX idx_sessions_session_number ON sessions(campaign_id, session_number);
 
--- RLS Policies
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Campaign members can view sessions"
@@ -345,13 +320,8 @@ CREATE TRIGGER update_sessions_updated_at
   BEFORE UPDATE ON sessions
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
-```
 
-### Session Attendance Table
-
-Tracks which players attended which sessions.
-
-```sql
+-- Session Attendance Table
 CREATE TABLE session_attendance (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -361,11 +331,9 @@ CREATE TABLE session_attendance (
   UNIQUE(session_id, user_id)
 );
 
--- Indexes
 CREATE INDEX idx_session_attendance_session_id ON session_attendance(session_id);
 CREATE INDEX idx_session_attendance_user_id ON session_attendance(user_id);
 
--- RLS Policies
 ALTER TABLE session_attendance ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Campaign members can view attendance"
@@ -394,13 +362,12 @@ CREATE POLICY "GMs can manage attendance"
         AND cm.role IN ('owner', 'gm')
     )
   );
-```
 
-### Characters Table
+-- =============================================
+-- CHARACTERS
+-- =============================================
 
-Player characters in campaigns.
-
-```sql
+-- Characters Table
 CREATE TABLE characters (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -411,18 +378,16 @@ CREATE TABLE characters (
   level INTEGER DEFAULT 1,
   description TEXT,
   avatar_url TEXT,
-  stats JSONB, -- Flexible stats based on system
+  stats JSONB,
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_characters_campaign_id ON characters(campaign_id);
 CREATE INDEX idx_characters_player_id ON characters(player_id);
 CREATE INDEX idx_characters_is_active ON characters(is_active);
 
--- RLS Policies
 ALTER TABLE characters ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Campaign members can view characters"
@@ -465,13 +430,12 @@ CREATE TRIGGER update_characters_updated_at
   BEFORE UPDATE ON characters
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
-```
 
-### Notes Table
+-- =============================================
+-- NOTES
+-- =============================================
 
-Campaign notes with visibility controls.
-
-```sql
+-- Notes Table
 CREATE TABLE notes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -479,20 +443,18 @@ CREATE TABLE notes (
   content TEXT,
   visibility TEXT DEFAULT 'private' CHECK (visibility IN ('private', 'shared', 'gm_only')),
   author_id UUID NOT NULL REFERENCES auth.users(id),
-  parent_id UUID REFERENCES notes(id) ON DELETE CASCADE, -- For hierarchical notes
-  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL, -- Link to session
+  parent_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_notes_campaign_id ON notes(campaign_id);
 CREATE INDEX idx_notes_author_id ON notes(author_id);
 CREATE INDEX idx_notes_visibility ON notes(visibility);
 CREATE INDEX idx_notes_parent_id ON notes(parent_id);
 CREATE INDEX idx_notes_session_id ON notes(session_id);
 
--- RLS Policies
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Authors can view own notes"
@@ -545,15 +507,12 @@ CREATE TRIGGER update_notes_updated_at
   BEFORE UPDATE ON notes
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
-```
 
----
+-- =============================================
+-- WORLDS
+-- =============================================
 
-## World Building
-
-### Worlds Table
-
-```sql
+-- Worlds Table
 CREATE TABLE worlds (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -565,14 +524,49 @@ CREATE TABLE worlds (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_worlds_created_by ON worlds(created_by);
 CREATE INDEX idx_worlds_is_public ON worlds(is_public);
 CREATE INDEX idx_worlds_created_at ON worlds(created_at DESC);
 
--- RLS Policies
 ALTER TABLE worlds ENABLE ROW LEVEL SECURITY;
 
+CREATE TRIGGER update_worlds_updated_at
+  BEFORE UPDATE ON worlds
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- World Members Table
+CREATE TABLE world_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  world_id UUID NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(world_id, user_id)
+);
+
+CREATE INDEX idx_world_members_world_id ON world_members(world_id);
+CREATE INDEX idx_world_members_user_id ON world_members(user_id);
+CREATE INDEX idx_world_members_role ON world_members(role);
+
+ALTER TABLE world_members ENABLE ROW LEVEL SECURITY;
+
+-- Trigger to auto-add creator as owner
+CREATE OR REPLACE FUNCTION add_world_owner()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO world_members (world_id, user_id, role)
+  VALUES (NEW.id, NEW.created_by, 'owner');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_world_created
+  AFTER INSERT ON worlds
+  FOR EACH ROW
+  EXECUTE FUNCTION add_world_owner();
+
+-- RLS Policies for Worlds
 CREATE POLICY "Members can view worlds"
   ON worlds FOR SELECT
   USING (
@@ -609,32 +603,7 @@ CREATE POLICY "Owners can delete worlds"
     )
   );
 
-CREATE TRIGGER update_worlds_updated_at
-  BEFORE UPDATE ON worlds
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-```
-
-### World Members Table
-
-```sql
-CREATE TABLE world_members (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  world_id UUID NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
-  joined_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(world_id, user_id)
-);
-
--- Indexes
-CREATE INDEX idx_world_members_world_id ON world_members(world_id);
-CREATE INDEX idx_world_members_user_id ON world_members(user_id);
-CREATE INDEX idx_world_members_role ON world_members(role);
-
--- RLS Policies
-ALTER TABLE world_members ENABLE ROW LEVEL SECURITY;
-
+-- RLS Policies for World Members
 CREATE POLICY "Members can view world membership"
   ON world_members FOR SELECT
   USING (
@@ -656,27 +625,7 @@ CREATE POLICY "Owners can manage members"
     )
   );
 
--- Trigger to auto-add creator as owner
-CREATE OR REPLACE FUNCTION add_world_owner()
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO world_members (world_id, user_id, role)
-  VALUES (NEW.id, NEW.created_by, 'owner');
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-CREATE TRIGGER on_world_created
-  AFTER INSERT ON worlds
-  FOR EACH ROW
-  EXECUTE FUNCTION add_world_owner();
-```
-
-### Campaign-World Linking Table
-
-Links campaigns to worlds, granting campaign members read access.
-
-```sql
+-- Campaign-World Linking Table
 CREATE TABLE campaign_worlds (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -686,11 +635,9 @@ CREATE TABLE campaign_worlds (
   UNIQUE(campaign_id, world_id)
 );
 
--- Indexes
 CREATE INDEX idx_campaign_worlds_campaign_id ON campaign_worlds(campaign_id);
 CREATE INDEX idx_campaign_worlds_world_id ON campaign_worlds(world_id);
 
--- RLS Policies
 ALTER TABLE campaign_worlds ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Campaign and world members can view links"
@@ -719,20 +666,190 @@ CREATE POLICY "Campaign owners and GMs can manage links"
         AND cm.role IN ('owner', 'gm')
     )
   );
-```
 
-### Categories Table
+-- =============================================
+-- SYSTEMS
+-- =============================================
 
-Organizes pages within worlds and systems.
+-- Systems Table
+CREATE TABLE systems (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  cover_image_url TEXT,
+  is_public BOOLEAN DEFAULT FALSE,
+  is_predefined BOOLEAN DEFAULT FALSE,
+  is_template BOOLEAN DEFAULT FALSE,
+  created_by UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-```sql
+CREATE INDEX idx_systems_created_by ON systems(created_by);
+CREATE INDEX idx_systems_is_public ON systems(is_public);
+CREATE INDEX idx_systems_is_predefined ON systems(is_predefined);
+CREATE INDEX idx_systems_is_template ON systems(is_template);
+CREATE INDEX idx_systems_created_at ON systems(created_at DESC);
+
+ALTER TABLE systems ENABLE ROW LEVEL SECURITY;
+
+CREATE TRIGGER update_systems_updated_at
+  BEFORE UPDATE ON systems
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- System Members Table
+CREATE TABLE system_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  system_id UUID NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(system_id, user_id)
+);
+
+CREATE INDEX idx_system_members_system_id ON system_members(system_id);
+CREATE INDEX idx_system_members_user_id ON system_members(user_id);
+CREATE INDEX idx_system_members_role ON system_members(role);
+
+ALTER TABLE system_members ENABLE ROW LEVEL SECURITY;
+
+-- Trigger to auto-add creator as owner
+CREATE OR REPLACE FUNCTION add_system_owner()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.is_predefined = FALSE AND NEW.created_by IS NOT NULL THEN
+    INSERT INTO system_members (system_id, user_id, role)
+    VALUES (NEW.id, NEW.created_by, 'owner');
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_system_created
+  AFTER INSERT ON systems
+  FOR EACH ROW
+  EXECUTE FUNCTION add_system_owner();
+
+-- RLS Policies for Systems
+CREATE POLICY "Everyone can view predefined systems"
+  ON systems FOR SELECT
+  USING (is_predefined = TRUE);
+
+CREATE POLICY "Members can view systems"
+  ON systems FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM system_members sm
+      WHERE sm.system_id = systems.id
+        AND sm.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can create systems"
+  ON systems FOR INSERT
+  WITH CHECK (auth.uid() = created_by);
+
+CREATE POLICY "Owners and editors can update systems"
+  ON systems FOR UPDATE
+  USING (
+    is_predefined = FALSE
+    AND EXISTS (
+      SELECT 1 FROM system_members sm
+      WHERE sm.system_id = systems.id
+        AND sm.user_id = auth.uid()
+        AND sm.role IN ('owner', 'editor')
+    )
+  );
+
+CREATE POLICY "Owners can delete systems"
+  ON systems FOR DELETE
+  USING (
+    is_predefined = FALSE
+    AND EXISTS (
+      SELECT 1 FROM system_members sm
+      WHERE sm.system_id = systems.id
+        AND sm.user_id = auth.uid()
+        AND sm.role = 'owner'
+    )
+  );
+
+-- RLS Policies for System Members
+CREATE POLICY "Members can view system membership"
+  ON system_members FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM system_members sm
+      WHERE sm.system_id = system_members.system_id
+        AND sm.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Owners can manage members"
+  ON system_members FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM system_members sm
+      WHERE sm.system_id = system_members.system_id
+        AND sm.user_id = auth.uid()
+        AND sm.role = 'owner'
+    )
+  );
+
+-- Campaign-System Linking Table
+CREATE TABLE campaign_systems (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  system_id UUID NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+  linked_at TIMESTAMPTZ DEFAULT NOW(),
+  linked_by UUID NOT NULL REFERENCES auth.users(id),
+  UNIQUE(campaign_id, system_id)
+);
+
+CREATE INDEX idx_campaign_systems_campaign_id ON campaign_systems(campaign_id);
+CREATE INDEX idx_campaign_systems_system_id ON campaign_systems(system_id);
+
+ALTER TABLE campaign_systems ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Campaign and system members can view links"
+  ON campaign_systems FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM campaign_members cm
+      WHERE cm.campaign_id = campaign_systems.campaign_id
+        AND cm.user_id = auth.uid()
+    )
+    OR
+    EXISTS (
+      SELECT 1 FROM system_members sm
+      WHERE sm.system_id = campaign_systems.system_id
+        AND sm.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Campaign owners and GMs can manage links"
+  ON campaign_systems FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM campaign_members cm
+      WHERE cm.campaign_id = campaign_systems.campaign_id
+        AND cm.user_id = auth.uid()
+        AND cm.role IN ('owner', 'gm')
+    )
+  );
+
+-- =============================================
+-- CATEGORIES
+-- =============================================
+
+-- Categories Table
 CREATE TABLE categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   world_id UUID REFERENCES worlds(id) ON DELETE CASCADE,
   system_id UUID REFERENCES systems(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
-  icon TEXT, -- Icon name or emoji
+  icon TEXT,
   description TEXT,
   is_predefined BOOLEAN DEFAULT FALSE,
   sort_order INTEGER DEFAULT 0,
@@ -743,12 +860,10 @@ CREATE TABLE categories (
   )
 );
 
--- Indexes
 CREATE INDEX idx_categories_world_id ON categories(world_id);
 CREATE INDEX idx_categories_system_id ON categories(system_id);
 CREATE INDEX idx_categories_slug ON categories(slug);
 
--- RLS Policies
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "World members can view categories"
@@ -796,13 +911,12 @@ CREATE POLICY "Owners and editors can manage system categories"
         AND sm.role IN ('owner', 'editor')
     )
   );
-```
 
-### Pages Table
+-- =============================================
+-- PAGES
+-- =============================================
 
-Notion-style hierarchical pages for both worlds and systems.
-
-```sql
+-- Pages Table
 CREATE TABLE pages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   world_id UUID REFERENCES worlds(id) ON DELETE CASCADE,
@@ -811,7 +925,7 @@ CREATE TABLE pages (
   parent_id UUID REFERENCES pages(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   icon TEXT,
-  content TEXT, -- Rich text content (stored as JSON or HTML)
+  content TEXT,
   sort_order INTEGER DEFAULT 0,
   created_by UUID NOT NULL REFERENCES auth.users(id),
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -822,16 +936,20 @@ CREATE TABLE pages (
   )
 );
 
--- Indexes
 CREATE INDEX idx_pages_world_id ON pages(world_id);
 CREATE INDEX idx_pages_system_id ON pages(system_id);
 CREATE INDEX idx_pages_category_id ON pages(category_id);
 CREATE INDEX idx_pages_parent_id ON pages(parent_id);
 CREATE INDEX idx_pages_created_by ON pages(created_by);
 
--- RLS Policies
 ALTER TABLE pages ENABLE ROW LEVEL SECURITY;
 
+CREATE TRIGGER update_pages_updated_at
+  BEFORE UPDATE ON pages
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- RLS Policies for Pages
 CREATE POLICY "World members can view pages"
   ON pages FOR SELECT
   USING (
@@ -854,7 +972,6 @@ CREATE POLICY "System members can view pages"
     )
   );
 
--- Additional RLS for campaign members accessing linked world/system content
 CREATE POLICY "Campaign members can view linked world pages"
   ON pages FOR SELECT
   USING (
@@ -903,17 +1020,11 @@ CREATE POLICY "System editors can manage pages"
     )
   );
 
-CREATE TRIGGER update_pages_updated_at
-  BEFORE UPDATE ON pages
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-```
+-- =============================================
+-- CUSTOM FIELDS
+-- =============================================
 
-### Custom Fields Table
-
-Defines custom fields for flexible page entries.
-
-```sql
+-- Custom Fields Table
 CREATE TABLE custom_fields (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   page_id UUID NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -925,15 +1036,13 @@ CREATE TABLE custom_fields (
       'relation', 'file', 'dice_notation', 'formula'
     )
   ),
-  field_config JSONB, -- Configuration for field (options for select, etc.)
+  field_config JSONB,
   sort_order INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_custom_fields_page_id ON custom_fields(page_id);
 
--- RLS Policies
 ALTER TABLE custom_fields ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Inherit permissions from page"
@@ -960,28 +1069,21 @@ CREATE POLICY "Page editors can manage custom fields"
         )
     )
   );
-```
 
-### Field Values Table
-
-Stores values for custom fields.
-
-```sql
+-- Field Values Table
 CREATE TABLE field_values (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   field_id UUID NOT NULL REFERENCES custom_fields(id) ON DELETE CASCADE,
   page_id UUID NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-  value JSONB, -- Flexible storage for any field type
+  value JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(field_id, page_id)
 );
 
--- Indexes
 CREATE INDEX idx_field_values_field_id ON field_values(field_id);
 CREATE INDEX idx_field_values_page_id ON field_values(page_id);
 
--- RLS Policies
 ALTER TABLE field_values ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Inherit permissions from page"
@@ -1013,13 +1115,12 @@ CREATE TRIGGER update_field_values_updated_at
   BEFORE UPDATE ON field_values
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
-```
 
-### Tags Table
+-- =============================================
+-- TAGS
+-- =============================================
 
-Tagging system for pages and content.
-
-```sql
+-- Tags Table
 CREATE TABLE tags (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   world_id UUID REFERENCES worlds(id) ON DELETE CASCADE,
@@ -1033,12 +1134,10 @@ CREATE TABLE tags (
   )
 );
 
--- Indexes
 CREATE INDEX idx_tags_world_id ON tags(world_id);
 CREATE INDEX idx_tags_system_id ON tags(system_id);
 CREATE INDEX idx_tags_name ON tags(name);
 
--- RLS Policies
 ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Inherit permissions from world/system"
@@ -1056,22 +1155,17 @@ CREATE POLICY "Inherit permissions from world/system"
         AND sm.user_id = auth.uid()
     ))
   );
-```
 
-### Page Tags Junction Table
-
-```sql
+-- Page Tags Junction Table
 CREATE TABLE page_tags (
   page_id UUID NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
   tag_id UUID NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
   PRIMARY KEY (page_id, tag_id)
 );
 
--- Indexes
 CREATE INDEX idx_page_tags_page_id ON page_tags(page_id);
 CREATE INDEX idx_page_tags_tag_id ON page_tags(tag_id);
 
--- RLS Policies
 ALTER TABLE page_tags ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Inherit permissions from page"
@@ -1082,13 +1176,12 @@ CREATE POLICY "Inherit permissions from page"
       WHERE p.id = page_tags.page_id
     )
   );
-```
 
-### Page Versions Table
+-- =============================================
+-- PAGE VERSIONS
+-- =============================================
 
-Version history for pages.
-
-```sql
+-- Page Versions Table
 CREATE TABLE page_versions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   page_id UUID NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -1099,11 +1192,9 @@ CREATE TABLE page_versions (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_page_versions_page_id ON page_versions(page_id);
 CREATE INDEX idx_page_versions_created_at ON page_versions(page_id, created_at DESC);
 
--- RLS Policies
 ALTER TABLE page_versions ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Inherit permissions from page"
@@ -1114,202 +1205,12 @@ CREATE POLICY "Inherit permissions from page"
       WHERE p.id = page_versions.page_id
     )
   );
-```
 
----
+-- =============================================
+-- NOTIFICATIONS
+-- =============================================
 
-## System Building
-
-### Systems Table
-
-```sql
-CREATE TABLE systems (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  description TEXT,
-  cover_image_url TEXT,
-  is_public BOOLEAN DEFAULT FALSE,
-  is_predefined BOOLEAN DEFAULT FALSE, -- Official systems like D&D 5e
-  is_template BOOLEAN DEFAULT FALSE, -- Available as template
-  created_by UUID REFERENCES auth.users(id),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Indexes
-CREATE INDEX idx_systems_created_by ON systems(created_by);
-CREATE INDEX idx_systems_is_public ON systems(is_public);
-CREATE INDEX idx_systems_is_predefined ON systems(is_predefined);
-CREATE INDEX idx_systems_is_template ON systems(is_template);
-CREATE INDEX idx_systems_created_at ON systems(created_at DESC);
-
--- RLS Policies
-ALTER TABLE systems ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Everyone can view predefined systems"
-  ON systems FOR SELECT
-  USING (is_predefined = TRUE);
-
-CREATE POLICY "Members can view systems"
-  ON systems FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM system_members sm
-      WHERE sm.system_id = systems.id
-        AND sm.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Users can create systems"
-  ON systems FOR INSERT
-  WITH CHECK (auth.uid() = created_by);
-
-CREATE POLICY "Owners and editors can update systems"
-  ON systems FOR UPDATE
-  USING (
-    is_predefined = FALSE
-    AND EXISTS (
-      SELECT 1 FROM system_members sm
-      WHERE sm.system_id = systems.id
-        AND sm.user_id = auth.uid()
-        AND sm.role IN ('owner', 'editor')
-    )
-  );
-
-CREATE POLICY "Owners can delete systems"
-  ON systems FOR DELETE
-  USING (
-    is_predefined = FALSE
-    AND EXISTS (
-      SELECT 1 FROM system_members sm
-      WHERE sm.system_id = systems.id
-        AND sm.user_id = auth.uid()
-        AND sm.role = 'owner'
-    )
-  );
-
-CREATE TRIGGER update_systems_updated_at
-  BEFORE UPDATE ON systems
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-```
-
-### System Members Table
-
-```sql
-CREATE TABLE system_members (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  system_id UUID NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
-  joined_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(system_id, user_id)
-);
-
--- Indexes
-CREATE INDEX idx_system_members_system_id ON system_members(system_id);
-CREATE INDEX idx_system_members_user_id ON system_members(user_id);
-CREATE INDEX idx_system_members_role ON system_members(role);
-
--- RLS Policies
-ALTER TABLE system_members ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Members can view system membership"
-  ON system_members FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM system_members sm
-      WHERE sm.system_id = system_members.system_id
-        AND sm.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Owners can manage members"
-  ON system_members FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM system_members sm
-      WHERE sm.system_id = system_members.system_id
-        AND sm.user_id = auth.uid()
-        AND sm.role = 'owner'
-    )
-  );
-
--- Trigger to auto-add creator as owner
-CREATE OR REPLACE FUNCTION add_system_owner()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- Only add owner if it's not a predefined system
-  IF NEW.is_predefined = FALSE AND NEW.created_by IS NOT NULL THEN
-    INSERT INTO system_members (system_id, user_id, role)
-    VALUES (NEW.id, NEW.created_by, 'owner');
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-CREATE TRIGGER on_system_created
-  AFTER INSERT ON systems
-  FOR EACH ROW
-  EXECUTE FUNCTION add_system_owner();
-```
-
-### Campaign-System Linking Table
-
-Links campaigns to systems, granting campaign members read access.
-
-```sql
-CREATE TABLE campaign_systems (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-  system_id UUID NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
-  linked_at TIMESTAMPTZ DEFAULT NOW(),
-  linked_by UUID NOT NULL REFERENCES auth.users(id),
-  UNIQUE(campaign_id, system_id)
-);
-
--- Indexes
-CREATE INDEX idx_campaign_systems_campaign_id ON campaign_systems(campaign_id);
-CREATE INDEX idx_campaign_systems_system_id ON campaign_systems(system_id);
-
--- RLS Policies
-ALTER TABLE campaign_systems ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Campaign and system members can view links"
-  ON campaign_systems FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM campaign_members cm
-      WHERE cm.campaign_id = campaign_systems.campaign_id
-        AND cm.user_id = auth.uid()
-    )
-    OR
-    EXISTS (
-      SELECT 1 FROM system_members sm
-      WHERE sm.system_id = campaign_systems.system_id
-        AND sm.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Campaign owners and GMs can manage links"
-  ON campaign_systems FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM campaign_members cm
-      WHERE cm.campaign_id = campaign_systems.campaign_id
-        AND cm.user_id = auth.uid()
-        AND cm.role IN ('owner', 'gm')
-    )
-  );
-```
-
----
-
-## Notifications
-
-### Notifications Table
-
-```sql
+-- Notifications Table
 CREATE TABLE notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -1323,16 +1224,14 @@ CREATE TABLE notifications (
   message TEXT,
   link_url TEXT,
   is_read BOOLEAN DEFAULT FALSE,
-  metadata JSONB, -- Additional data (campaign_id, session_id, etc.)
+  metadata JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes
 CREATE INDEX idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX idx_notifications_is_read ON notifications(user_id, is_read);
 CREATE INDEX idx_notifications_created_at ON notifications(user_id, created_at DESC);
 
--- RLS Policies
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view own notifications"
@@ -1345,16 +1244,12 @@ CREATE POLICY "Users can update own notifications"
 
 CREATE POLICY "System can create notifications"
   ON notifications FOR INSERT
-  WITH CHECK (TRUE); -- Allow system to create, but lock down in application layer
-```
+  WITH CHECK (TRUE);
 
----
+-- =============================================
+-- PERMISSION HELPER FUNCTIONS
+-- =============================================
 
-## Helper Functions
-
-### Permission Check Functions
-
-```sql
 -- Check if user has specific role in campaign
 CREATE OR REPLACE FUNCTION user_has_campaign_role(
   p_campaign_id UUID,
@@ -1417,20 +1312,18 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
-```
 
----
+-- =============================================
+-- FULL-TEXT SEARCH SETUP
+-- =============================================
 
-## Full-Text Search Setup
-
-```sql
--- Add full-text search columns to pages
+-- Add search vector column to pages
 ALTER TABLE pages ADD COLUMN search_vector tsvector;
 
--- Create index for full-text search
+-- Create index for full-text search on pages
 CREATE INDEX idx_pages_search_vector ON pages USING gin(search_vector);
 
--- Function to update search vector
+-- Function to update search vector for pages
 CREATE OR REPLACE FUNCTION pages_search_vector_update()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -1441,16 +1334,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger to auto-update search vector
+-- Trigger to auto-update search vector for pages
 CREATE TRIGGER pages_search_vector_update_trigger
   BEFORE INSERT OR UPDATE ON pages
   FOR EACH ROW
   EXECUTE FUNCTION pages_search_vector_update();
 
--- Similar setup for notes
+-- Add search vector column to notes
 ALTER TABLE notes ADD COLUMN search_vector tsvector;
+
+-- Create index for full-text search on notes
 CREATE INDEX idx_notes_search_vector ON notes USING gin(search_vector);
 
+-- Function to update search vector for notes
 CREATE OR REPLACE FUNCTION notes_search_vector_update()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -1461,71 +1357,18 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Trigger to auto-update search vector for notes
 CREATE TRIGGER notes_search_vector_update_trigger
   BEFORE INSERT OR UPDATE ON notes
   FOR EACH ROW
   EXECUTE FUNCTION notes_search_vector_update();
-```
 
----
+-- =============================================
+-- MIGRATION COMPLETE
+-- =============================================
 
-## Database Migrations
-
-All schema changes should be tracked using Supabase migrations:
-
-```bash
-# Create a new migration
-supabase migration new <migration_name>
-
-# Apply migrations locally
-supabase db reset
-
-# Push migrations to production
-supabase db push
-```
-
----
-
-## Performance Considerations
-
-1. **Indexes**: All foreign keys are indexed for fast joins
-2. **RLS Functions**: Complex permission checks use `SECURITY DEFINER` functions to reduce query complexity
-3. **Full-Text Search**: Using PostgreSQL's native full-text search with GIN indexes
-4. **JSONB**: Used for flexible fields (stats, metadata) with GIN indexes where needed
-5. **Cascading Deletes**: Properly configured to maintain referential integrity
-6. **Updated_at Triggers**: Automatic timestamp updates for audit trails
-
----
-
-## Security Model Summary
-
-### Access Control Pattern
-
-- **Resource-based permissions**: Roles stored in `*_members` tables, not user profiles
-- **No circular RLS dependencies**: Membership tables are independent of user identity
-- **Cascading access**: Campaign members get read access to linked worlds/systems
-- **Granular roles**: Different permissions per resource type (owner, editor, viewer, GM, player)
-
-### RLS Policy Types
-
-1. **SELECT**: Read access based on membership
-2. **INSERT**: Create with proper ownership checks
-3. **UPDATE**: Edit based on role (owner/editor/GM)
-4. **DELETE**: Only owners can delete resources
-
-### Site Admins vs Resource Owners
-
-- **Site admins**: Platform management, moderation (stored in `site_admins`)
-- **Resource owners**: Content ownership and management (stored in `*_members` tables)
-- Completely separate authorization paths
-
----
-
-## Next Steps
-
-1. **Run migrations**: Execute all CREATE statements in order
-2. **Seed predefined data**: Add predefined categories and systems
-3. **Test RLS policies**: Verify permissions with different user scenarios
-4. **Set up storage buckets**: Configure file upload policies
-5. **Create helper queries**: Build reusable query functions for common operations
-
+-- Grant necessary permissions
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
