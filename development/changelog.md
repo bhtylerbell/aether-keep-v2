@@ -1,0 +1,21 @@
+# Change Log
+
+## [Date: 2025-10-31 17:30]
+
+Fixed authentication flow bugs and updated to Next.js 16 conventions. Fixed issue where successful sign-in and password reset operations were showing error toasts due to Next.js redirect errors being caught in try-catch blocks. Updated sign-in and reset password pages to properly handle NEXT_REDIRECT errors. Removed unnecessary client-side navigation code since redirects happen on the server. Migrated from deprecated `middleware.ts` to Next.js 16's `proxy.ts` convention, renaming the middleware export function to `proxy()`. This eliminates the Next.js 16 deprecation warning and ensures compatibility with the latest framework version.
+
+## [Date: 2025-10-31 17:00]
+
+Completed Phase 1.5 Authentication System. Implemented complete authentication flow with Supabase Auth integration. Created Supabase client utilities for client-side (`lib/supabase/client.ts`), server-side (`lib/supabase/server.ts`), and middleware (`lib/supabase/middleware.ts`) operations. Set up Next.js middleware for route protection and session management. Created auth validation schemas using Zod (`lib/validations/auth.ts`) with password strength requirements. Implemented server actions for sign-in, sign-up, sign-out, and password reset (`app/(auth)/actions.ts`). Built complete UI for authentication including sign-in page with form validation and error handling, sign-up page with email verification flow, forgot password page, reset password page, and auth error page. Created auth hooks (`lib/hooks/use-auth.ts`) for `useUser()`, `useSession()`, and `useAuth()`. Added Sonner toast notifications to root layout. Created dashboard page placeholder with sign-out functionality. All forms include proper validation, loading states, and user feedback. Middleware redirects unauthenticated users to sign-in and authenticated users away from auth pages. Updated `plan.md` to mark Phase 1.5 tasks complete.
+
+## [Date: 2025-10-31 16:00]
+
+Completed remaining tasks for Phase 1.1. Installed `nprogress` package with TypeScript types for loading indicators. Set up ESLint and Prettier configuration with project-specific rules including Prettier integration, custom TypeScript rules for unused variables and explicit any warnings, and React-specific rules. Created `.prettierrc` configuration file with formatting standards (2 spaces, semicolons, double quotes, 80 char line width). Created `.prettierignore` to exclude build artifacts and dependencies. Added npm scripts for linting (`lint`, `lint:fix`) and formatting (`format`, `format:check`). Ran formatter across all project files to ensure consistency. Phase 1.1 is now fully complete except for Supabase CLI installation and project creation which will be handled separately.
+
+## [Date: 2025-10-31 15:30]
+
+Completed Phase 1.1 Environment & Dependencies Setup. Installed all core dependencies including Supabase packages (@supabase/supabase-js, @supabase/auth-helpers-nextjs, @supabase/ssr), TanStack Query for data fetching, React Hook Form and Zod for form validation, date-fns for date utilities, clsx and tailwind-merge for className management, Headless UI for accessible components, Heroicons for icons, Sonner for notifications, and security packages (DOMPurify, validator) with their TypeScript types. Created `.env.local.example` template file with Supabase configuration placeholders. Verified TypeScript path aliases are correctly configured. Created `lib/utils.ts` with className merging utility function (`cn`). Updated `plan.md` to mark Phase 1.1 tasks as complete.
+
+## [Date: 2025-10-31 14:45]
+
+Created comprehensive development plan in `plan.md` with detailed action items organized by phase. The plan breaks down the entire roadmap into 7 phases with specific, actionable checkboxes covering foundation setup (Phase 1 with auth prioritized), Campaign Manager (Phase 2), World Building (Phase 3), System Building (Phase 4), additional features and polish (Phase 5), marketing pages (Phase 6), and testing/launch (Phase 7). Updated `copilot-instructions.md` to enforce following the phased plan, marking tasks complete with developer validation, and maintaining the changelog with dated entries for all significant changes.
